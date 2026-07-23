@@ -182,3 +182,14 @@ flag {
     purpose: PURPOSE_BUGFIX
   }
 }
+
+# OWNER=nagendranb TARGET=26Q4
+flag {
+  name: "reset_timers_on_sa_to_lte_transit"
+  namespace: "telephony"
+  description: "Reset 5G icon grace period timers upon 5G SA to 4G LTE inter-RAT handover"
+  bug: "537543758"
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+}

@@ -259,6 +259,9 @@ public class NetworkTypeController extends StateMachine {
     private ConnectivityManager mConnectivityManager;
     private boolean mEndcStatus = false;
     private boolean mIsTimerResetEnabledOnEndcToSaTransit;
+    private boolean mIsSa = false;
+    private boolean mPreviousIsSa = false;
+    private boolean mIsTimerResetEnabledOnSaToLteTransit;
 
     private final ConnectivityManager.NetworkCallback mNetworkCallback =
             new ConnectivityManager.NetworkCallback() {
@@ -500,6 +503,8 @@ public class NetworkTypeController extends StateMachine {
                 CarrierConfigManager.KEY_NR_TIMERS_RESET_ON_VOICE_QOS_BOOL);
         mIsTimerResetEnabledOnEndcToSaTransit = config.getBoolean(
             CarrierConfigManager.KEY_NR_TIMERS_RESET_ON_ENDC_TO_SA_TRANSIT_BOOL);
+        mIsTimerResetEnabledOnSaToLteTransit = config.getBoolean(
+            CarrierConfigManager.KEY_NR_TIMERS_RESET_ON_SA_TO_LTE_TRANSIT_BOOL);
         mLtePlusThresholdBandwidth = config.getInt(
                 CarrierConfigManager.KEY_LTE_PLUS_THRESHOLD_BANDWIDTH_KHZ_INT);
         mNrAdvancedThresholdBandwidth = config.getInt(
@@ -1544,6 +1549,10 @@ public class NetworkTypeController extends StateMachine {
                     + " due to existing " + mPrimaryTimerState + " primary timer.");
         } else if (mIsTimerResetEnabledOnVoiceQos && mInVoiceCall) {
             log("Skip primary timer to " + destName + " due to in call");
+        } else if (mFeatureFlags.resetTimersOnSaToLteTransit()
+                && mIsTimerResetEnabledOnSaToLteTransit
+                && isLte(getDataNetworkType()) && mPreviousIsSa) {
+            log("Skip primary timer to " + destName + " due to SA to LTE transit");
         } else {
             if (DBG) {
                 log("Transition with primary timer from " + mPreviousState + " to " + destName);
@@ -1643,9 +1652,20 @@ public class NetworkTypeController extends StateMachine {
         return previous;
     }
 
+    private boolean updateSaStateAndGetPrevious(int currentRat) {
+        if (!mFeatureFlags.resetTimersOnSaToLteTransit()) {
+            return false;
+        }
+        boolean previous = mIsSa;
+        mIsSa = (currentRat == TelephonyManager.NETWORK_TYPE_NR);
+        mPreviousIsSa = previous;
+        return previous;
+    }
+
     private void updateTimers() {
         int currentRat = getDataNetworkType();
         boolean previousIsEndc = updateEndcStateAndGetPrevious(currentRat);
+        boolean previousIsSa = updateSaStateAndGetPrevious(currentRat);
 
         if ((mPhone.getCachedAllowedNetworkTypesBitmask()
                 & TelephonyManager.NETWORK_TYPE_BITMASK_NR) == 0) {
@@ -1699,6 +1719,11 @@ public class NetworkTypeController extends StateMachine {
                 if (DBG) log("Reset timers since SA transit (from ENDC).");
                 resetAllTimers();
               // TODO: We should create a new config for this rather than reusing this config
+            } else if (mFeatureFlags.resetTimersOnSaToLteTransit()
+                    && mIsTimerResetEnabledOnSaToLteTransit
+                    && isLte(currentRat) && previousIsSa) {
+                if (DBG) log("Reset timers since SA to LTE transit.");
+                resetAllTimers();
             } else if (mIsTimerResetEnabledForLegacyStateRrcIdle
                     && mPrimaryTimerState.equals(STATE_CONNECTED_NR_ADVANCED)
                     && currentState.equals(STATE_CONNECTED_RRC_IDLE)) {
@@ -1984,6 +2009,10 @@ public class NetworkTypeController extends StateMachine {
         pw.println("mEnableNrAdvancedWhileRoaming=" + mEnableNrAdvancedWhileRoaming);
         pw.println("mIsDeviceIdleMode=" + mIsDeviceIdleMode);
         pw.println("mIsTimerResetEnabledOnVoiceQos=" + mIsTimerResetEnabledOnVoiceQos);
+        pw.println("mIsTimerResetEnabledOnEndcToSaTransit="
+                + mIsTimerResetEnabledOnEndcToSaTransit);
+        pw.println("mIsTimerResetEnabledOnSaToLteTransit="
+                + mIsTimerResetEnabledOnSaToLteTransit);
         pw.decreaseIndent();
         pw.flush();
     }

@@ -35,6 +35,7 @@ import android.os.IThermalService;
 import android.os.Looper;
 import android.os.PersistableBundle;
 import android.os.PowerManager;
+import android.platform.test.flag.junit.SetFlagsRule;
 import android.telephony.CarrierConfigManager;
 import android.telephony.CellInfo;
 import android.telephony.NetworkRegistrationInfo;
@@ -56,6 +57,7 @@ import com.android.internal.util.StateMachine;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -71,6 +73,9 @@ public class NetworkTypeControllerTest extends TelephonyTest {
     private NetworkTypeController mNetworkTypeController;
     private PersistableBundle mBundle;
     private CarrierConfigManager.CarrierConfigChangeListener mCarrierConfigChangeListener;
+
+    @Rule
+    public final SetFlagsRule mSetFlagsRule = new SetFlagsRule();
 
     private IState getCurrentState() throws Exception {
         Method method = StateMachine.class.getDeclaredMethod("getCurrentState");
@@ -2498,7 +2503,56 @@ public class NetworkTypeControllerTest extends TelephonyTest {
         // 4. Verify timers are reset because previousIsEndc was true
         assertFalse(mNetworkTypeController.areAnyTimersActive());
         assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE,
-            mNetworkTypeController.getOverrideNetworkType());
+                mNetworkTypeController.getOverrideNetworkType());
+    }
+
+    @Test
+    public void testNrTimerResetWhenTransitToSaToLte() throws Exception {
+        // Enable the feature flag
+        mSetFlagsRule.enableFlags(
+                com.android.internal.telephony.flags.Flags.FLAG_RESET_TIMERS_ON_SA_TO_LTE_TRANSIT);
+        doReturn(true).when(mFeatureFlags).resetTimersOnSaToLteTransit();
+        // Enable the carrier config
+        mBundle.putBoolean(
+                CarrierConfigManager.KEY_NR_TIMERS_RESET_ON_SA_TO_LTE_TRANSIT_BOOL, true);
+        // Configure 5G icon to display 5G only when connected, and set grace period
+        mBundle.putString(CarrierConfigManager.KEY_5G_ICON_CONFIGURATION_STRING,
+                "connected:5G");
+        mBundle.putString(CarrierConfigManager.KEY_5G_ICON_DISPLAY_GRACE_PERIOD_STRING,
+                "connected,any,31");
+        doReturn(ServiceState.FREQUENCY_RANGE_UNKNOWN).when(mServiceState).getNrFrequencyRange();
+        sendCarrierConfigChanged();
+
+        // 1. Establish 5G SA connection
+        doReturn(TelephonyManager.NETWORK_TYPE_NR).when(mServiceState).getDataNetworkType();
+        mNetworkRegistrationInfo = new NetworkRegistrationInfo.Builder()
+                .setAccessNetworkTechnology(TelephonyManager.NETWORK_TYPE_NR)
+                .setRegistrationState(NetworkRegistrationInfo.REGISTRATION_STATE_HOME)
+                .build();
+        doReturn(mNetworkRegistrationInfo).when(mServiceState).getNetworkRegistrationInfo(
+                anyInt(), anyInt());
+        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
+
+        mNetworkTypeController.sendMessage(3 /* EVENT_SERVICE_STATE_CHANGED */);
+        processAllMessages();
+
+        // 2. Perform iRAT Handover to LTE cell
+        doReturn(TelephonyManager.NETWORK_TYPE_LTE).when(mServiceState).getDataNetworkType();
+        mNetworkRegistrationInfo = new NetworkRegistrationInfo.Builder()
+                .setAccessNetworkTechnology(TelephonyManager.NETWORK_TYPE_LTE)
+                .setRegistrationState(NetworkRegistrationInfo.REGISTRATION_STATE_HOME)
+                .build();
+        doReturn(mNetworkRegistrationInfo).when(mServiceState).getNetworkRegistrationInfo(
+                anyInt(), anyInt());
+        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
+
+        mNetworkTypeController.sendMessage(3 /* EVENT_SERVICE_STATE_CHANGED */);
+        processAllMessages();
+
+        // 3. Verify that timers are reset and 4G RAT icon is displayed immediately
+        assertFalse(mNetworkTypeController.areAnyTimersActive());
+        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE,
+                mNetworkTypeController.getOverrideNetworkType());
     }
 
     @Test
