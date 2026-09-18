@@ -1549,8 +1549,10 @@ public class NetworkTypeController extends StateMachine {
                     + " due to existing " + mPrimaryTimerState + " primary timer.");
         } else if (mIsTimerResetEnabledOnVoiceQos && mInVoiceCall) {
             log("Skip primary timer to " + destName + " due to in call");
-        } else if (mFeatureFlags.resetTimersOnSaToLteTransit()
-                && mIsTimerResetEnabledOnSaToLteTransit
+        // Temporarily comment out the aconfig guard for resetTimersOnSaToLteTransit
+        // on the cp2a release.
+        } else if (/**mFeatureFlags.resetTimersOnSaToLteTransit()
+                && **/mIsTimerResetEnabledOnSaToLteTransit
                 && isLte(getDataNetworkType()) && mPreviousIsSa) {
             log("Skip primary timer to " + destName + " due to SA to LTE transit");
         } else {
@@ -1653,9 +1655,11 @@ public class NetworkTypeController extends StateMachine {
     }
 
     private boolean updateSaStateAndGetPrevious(int currentRat) {
-        if (!mFeatureFlags.resetTimersOnSaToLteTransit()) {
+        // Temporarily comment out the aconfig guard for resetTimersOnSaToLteTransit
+        // on the cp2a release.
+        /** if (!mFeatureFlags.resetTimersOnSaToLteTransit()) {
             return false;
-        }
+        } **/
         boolean previous = mIsSa;
         mIsSa = (currentRat == TelephonyManager.NETWORK_TYPE_NR);
         mPreviousIsSa = previous;
@@ -1718,9 +1722,11 @@ public class NetworkTypeController extends StateMachine {
                 && currentRat == TelephonyManager.NETWORK_TYPE_NR && previousIsEndc) {
                 if (DBG) log("Reset timers since SA transit (from ENDC).");
                 resetAllTimers();
+              // Temporarily comment out the aconfig guard for resetTimersOnSaToLteTransit
+              // on the cp2a release.
               // TODO: We should create a new config for this rather than reusing this config
-            } else if (mFeatureFlags.resetTimersOnSaToLteTransit()
-                    && mIsTimerResetEnabledOnSaToLteTransit
+            } else if (/** mFeatureFlags.resetTimersOnSaToLteTransit()
+                    && **/ mIsTimerResetEnabledOnSaToLteTransit
                     && isLte(currentRat) && previousIsSa) {
                 if (DBG) log("Reset timers since SA to LTE transit.");
                 resetAllTimers();

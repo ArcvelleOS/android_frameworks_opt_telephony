@@ -2506,7 +2506,9 @@ public class NetworkTypeControllerTest extends TelephonyTest {
                 mNetworkTypeController.getOverrideNetworkType());
     }
 
-    @Test
+    // Temporarily comment out the aconfig guard for resetTimersOnSaToLteTransit
+    // on the cp2a release.
+    // @Test
     public void testNrTimerResetWhenTransitToSaToLte() throws Exception {
         // Enable the feature flag
         mSetFlagsRule.enableFlags(
