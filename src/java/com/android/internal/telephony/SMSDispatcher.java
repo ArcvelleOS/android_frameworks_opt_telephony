@@ -114,6 +114,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Objects;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -1682,12 +1683,12 @@ public abstract class SMSDispatcher extends Handler {
                     skipShortCodeCheck, uniqueMessageId, uid);
 
             if (mFeatureFlags.messagePromotion() && persistMessage) {
-                boolean upgradeMessage =
-                        MessageUpgradeController.isMessageUpgradeSupportedForPackage(
-                                mContext, callingUser, callingPkg, /*shouldLog=*/true);
-                if (upgradeMessage) {
-                    tracker.persistPendingMessageIfRequired(mContext);
-                    if (tracker.mMessageUri != null) {
+                tracker.persistPendingMessageIfRequired(mContext);
+                if (tracker.mMessageUri != null) {
+                    boolean upgradeMessage =
+                            MessageUpgradeController.isMessageUpgradeSupportedForPackage(
+                                    mContext, callingUser, callingPkg, /*shouldLog=*/true);
+                    if (upgradeMessage) {
                         Rlog.d(TAG, "sendText: requesting message upgrade via DMA.");
                         MessageUpgradeController.upgradeMessage(
                                 mContext, callingUser, tracker.mMessageUri,
@@ -1695,23 +1696,31 @@ public abstract class SMSDispatcher extends Handler {
                                 Collections.singletonList(tracker.mDeliveryIntent),
                                 Runnable::run,
                                 status -> {
-                                if (status != UPGRADE_STATUS_ACCEPTED) {
-                                    Rlog.d(TAG, "sendText: message upgrade request failed.");
-                                    markMessageAsUnrestricted(tracker.mMessageUri);
-                                    if (!sendSmsByCarrierApp(false /* isDataSms */, tracker)) {
-                                        sendSubmitPdu(tracker);
+                                    if (status != UPGRADE_STATUS_ACCEPTED) {
+                                        Rlog.d(TAG, "sendText: message upgrade request failed.");
+                                        markMessageAsUnrestricted(tracker.mMessageUri);
+                                        if (!sendSmsByCarrierApp(false /* isDataSms */, tracker)) {
+                                            sendSubmitPdu(tracker);
+                                        }
                                     }
-                                }
-                            });
+                                });
                         return;
+                    } else {
+                        Rlog.d(TAG, "sendText: message upgrade is not supported or the calling app"
+                                + " is DMA.");
+                        // Since all non-Dma messages are marked 'restricted' on insertion and
+                        // message upgrade is not attempted, we need to unrestrict the non-Dma
+                        // message before sending.
+                        if (!Objects.equals(callingPkg, Sms.getDefaultSmsPackage(mContext))) {
+                            markMessageAsUnrestricted(tracker.mMessageUri);
+                        }
                     }
-                } else if (tracker.mMessageUri != null) {
-                    // If the message promotion is not attempted, unrestrict the message.
-                    markMessageAsUnrestricted(tracker.mMessageUri);
-                    Rlog.d(TAG, "sendText: message upgrade is not supported or the calling app"
-                            + " is DMA.");
+                } else {
+                    Rlog.d(TAG, "sendText: couldn't persist message into the db, sending without"
+                            + " upgrade..");
                 }
             }
+
             if (!sendSmsByCarrierApp(false /* isDataSms */, tracker)) {
                 sendSubmitPdu(tracker);
             }
@@ -1925,13 +1934,6 @@ public abstract class SMSDispatcher extends Handler {
         final AtomicInteger unsentPartCount = new AtomicInteger(msgCount);
         final AtomicBoolean anyPartFailed = new AtomicBoolean(false);
 
-        // Check if the message should be upgraded and send by DMA.
-        boolean upgradeMessage = false;
-        if (mFeatureFlags.messagePromotion() && persistMessage) {
-            upgradeMessage = MessageUpgradeController.isMessageUpgradeSupportedForPackage(
-                    mContext, callingUser, callingPkg, /*shouldLog=*/true);
-        }
-
         for (int i = 0; i < msgCount; i++) {
             SmsHeader.ConcatRef concatRef = new SmsHeader.ConcatRef();
             concatRef.refNumber = refNumber;
@@ -1975,28 +1977,48 @@ public abstract class SMSDispatcher extends Handler {
             }
 
             trackers[i].mPersistMessage = persistMessage;
-            if (upgradeMessage && (i == (msgCount - 1))) {
-                // We only persist the message as DRAFT if this is the last part and use the uri to
-                // upgrade the message. This is how we are persisting messages as of today, after
-                // receiving the send result.
-                trackers[i].persistPendingMessageIfRequired(mContext);
-            }
         }
 
-        if (upgradeMessage && trackers[msgCount - 1].mMessageUri != null) {
-            Rlog.d(TAG, "sendMultipartText: requesting message upgrade via DMA.");
-            MessageUpgradeController.upgradeMessage(
-                    mContext, callingUser, trackers[msgCount - 1].mMessageUri,
-                    sentIntents,
-                    deliveryIntents,
-                    Runnable::run,
-                    status -> {
-                        if (status != UPGRADE_STATUS_ACCEPTED) {
-                            Rlog.d(TAG, "sendText: message upgrade request failed.");
-                            sendMultipartTextByCarrierApp(parts, trackers);
-                        }
-                    });
-            return;
+        if (mFeatureFlags.messagePromotion() && persistMessage) {
+            // Persist the message in OUTBOX before attempting upgrade.
+            // To ensure a single message entry in the db, we persist the message using the last
+            // part and use the message uri to request upgrade via default SMS app.
+            SmsTracker lastPartTracker = trackers[msgCount - 1];
+            lastPartTracker.persistPendingMessageIfRequired(mContext);
+            if (lastPartTracker.mMessageUri != null) {
+                boolean upgradeMessage =
+                        MessageUpgradeController.isMessageUpgradeSupportedForPackage(
+                                mContext, callingUser, callingPkg, /*shouldLog=*/true);
+                if (upgradeMessage) {
+                    Rlog.d(TAG, "sendMultipartText: requesting message upgrade via DMA.");
+                    MessageUpgradeController.upgradeMessage(
+                            mContext, callingUser, lastPartTracker.mMessageUri,
+                            sentIntents,
+                            deliveryIntents,
+                            Runnable::run,
+                            status -> {
+                                if (status != UPGRADE_STATUS_ACCEPTED) {
+                                    Rlog.d(TAG, "sendMultipartText: message upgrade request"
+                                            + " failed.");
+                                    markMessageAsUnrestricted(lastPartTracker.mMessageUri);
+                                    sendMultipartTextByCarrierApp(parts, trackers);
+                                }
+                            });
+                    return;
+                } else {
+                    Rlog.d(TAG, "sendMultipartText: message upgrade is not supported or the"
+                            + " calling app is DMA.");
+                    // Since all non-Dma messages are marked 'restricted' on insertion and
+                    // message upgrade is not attempted, we need to unrestrict the non-Dma
+                    // message before sending.
+                    if (!Objects.equals(callingPkg, Sms.getDefaultSmsPackage(mContext))) {
+                        markMessageAsUnrestricted(lastPartTracker.mMessageUri);
+                    }
+                }
+            } else {
+                Rlog.d(TAG, "sendMultipartText: couldn't persist message into the db, sending"
+                        + " without upgrade..");
+            }
         }
 
         sendMultipartTextByCarrierApp(parts, trackers);
