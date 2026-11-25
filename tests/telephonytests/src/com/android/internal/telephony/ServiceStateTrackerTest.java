@@ -671,6 +671,22 @@ public class ServiceStateTrackerTest extends TelephonyTest {
     }
 
     @Test
+    public void testEmergencyRadioOnClearsPendingRadioPowerOff() {
+        doReturn(true).when(mFeatureFlags).keepWfcOnApm();
+        // Keep data connected so airplane mode leaves radio power-off pending.
+        doReturn(false).when(mDataNetworkController).areAllDataDisconnected(true);
+
+        sst.setRadioPower(false);
+        processAllMessages();
+        assertTrue(sst.isPendingRadioPowerOffAfterDataOff());
+
+        // An emergency call must cancel the pending airplane-mode power-off state. Otherwise,
+        // normal data network requests remain blocked by PENDING_TEAR_DOWN_ALL after the call.
+        sst.setRadioPower(true, true, true, false);
+        assertFalse(sst.isPendingRadioPowerOffAfterDataOff());
+    }
+
+    @Test
     public void testSetRadioPowerWaitForAllDataDisconnectedApmThenShutDown() throws Exception {
         // Set up DSDS environment
         DataNetworkController dataNetworkController2 =
